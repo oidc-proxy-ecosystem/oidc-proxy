@@ -1,0 +1,16 @@
+oidc-proxy
+/oidc-plugin
+/ssl
+/.github
+/.devcontainer
+/cache/*.json
+/cache/*.yaml
+/cache/*.yml
+/docs
+/tmp
+LICENSE
+README.md
+test.yaml
+application.yaml
+*.env
+Dockerfile
