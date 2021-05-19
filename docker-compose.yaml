@@ -1,0 +1,23 @@
+version: "3.7"
+services:
+  oidc-proxy-dev:
+    build:
+      dockerfile: .devcontainer/Dockerfile
+      context: .
+    tty: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/src/:delegated
+      - ~/.ssh:/root/.ssh
+      - ~/.gitconfig:/root/.gitconfig
+    container_name: oidc-proxy-dev
+    environment:
+      TZ: Asia/Tokyo
+    networks:
+      - oidc-proxy
+networks:
+  default:
+    name: bridge
+  oidc-proxy:
+    name: oidc-proxy
+    driver: bridge

@@ -1,0 +1,12 @@
+{
+    "go.testEnvFile": "${workspaceFolder}/.env",
+    "go.testFlags": [
+        "-v"
+    ],
+    "[markdown]": {
+        "editor.formatOnSave": true
+    },
+    "cSpell.words": [
+        "oidc"
+    ],
+}
