@@ -3,11 +3,15 @@ package routes
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"time"
 
 	"github.com/coreos/go-oidc"
 	"github.com/gorilla/sessions"
@@ -17,6 +21,8 @@ import (
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/logger"
 	"golang.org/x/oauth2"
 )
+
+var ErrNoEndpointsAvailable = errors.New("no endpoints available")
 
 type handler struct {
 	conf config.Servers
@@ -172,7 +178,7 @@ type proxyContextKey struct{}
 var proxyKey proxyContextKey
 
 type proxyValue struct {
-	targetURL        *url.URL
+	registry         *Registry
 	host             string
 	isProxySslVerify bool
 	tokenType        string
@@ -185,12 +191,11 @@ func fromProxyContext(ctx context.Context) proxyValue {
 
 func (h *handler) proxy(w http.ResponseWriter, r *http.Request) {
 	value := fromProxyContext(r.Context())
-	targetURL := value.targetURL
+	registry := value.registry
 	host := value.host
 	typ := value.tokenType
 	tokenKey := value.tokenKey
 	isProxySslVerify := value.isProxySslVerify
-
 	ctx := context.Background()
 	conf := h.conf
 	log := h.log
@@ -220,26 +225,53 @@ func (h *handler) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	director := func(req *http.Request) {
-		req.URL.Scheme = targetURL.Scheme
-		req.URL.Host = targetURL.Host
+		req.URL.Scheme = registry.Endpoint().Scheme
+		req.URL.Host = registry.Endpoint().Host
 		req.Host = host
 	}
-	rt := newSslVerifyTransport(isProxySslVerify)
+	var rt http.RoundTripper = &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: isProxySslVerify,
+		},
+		Dial: func(network, addr string) (net.Conn, error) {
+			d := &net.Dialer{}
+			for i := 0; i < len(registry.Endpoints); i++ {
+				e := registry.Endpoint()
+				conn, err := d.Dial(network, e.URL.Host)
+				if err != nil {
+					continue
+				}
+				return conn, err
+			}
+
+			return nil, ErrNoEndpointsAvailable
+		},
+	}
 	rt = NewDumpTransport(r.Context(), rt)
 	rt = NewAuthorizationTransport(typ, rawToken, rt)
 	reverse := &httputil.ReverseProxy{
-		Director:     director,
-		Transport:    rt,
-		ErrorHandler: errorResponse(log),
+		Director:      director,
+		ErrorHandler:  errorResponse(log),
+		Transport:     rt,
+		FlushInterval: -1,
 	}
-	reverse.FlushInterval = -1
 	reverse.ServeHTTP(w, r)
 }
 
-func (h *handler) Proxy(pattern string, targetURL *url.URL, host, typ, tokenKey string, isProxySslVerify bool) {
+func (h *handler) Proxy(pattern string, registry *Registry, host, typ, tokenKey string, isProxySslVerify bool) {
 	h.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		value := proxyValue{
-			targetURL:        targetURL,
+			registry:         registry,
 			host:             host,
 			tokenType:        typ,
 			tokenKey:         tokenKey,
@@ -257,7 +289,7 @@ type Handler interface {
 	Login(pattern string)
 	Callback(pattern string)
 	Logout(pattern string)
-	Proxy(pattern string, targetURL *url.URL, host, typ, tokenKey string, isProxySslVerify bool)
+	Proxy(pattern string, registry *Registry, host, typ, tokenKey string, isProxySslVerify bool)
 }
 
 func new(conf config.Servers) Handler {

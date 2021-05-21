@@ -3,7 +3,6 @@ package routes
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/config"
@@ -40,12 +39,13 @@ func New(configuration config.GetConfiguration) (Handler, error) {
 	router := new(conf)
 	host := conf.GetHostname()
 	for _, location := range conf.Locations {
-		u, err := url.Parse(location.ProxyPass)
+		proxypasses := strings.Split(location.ProxyPass, ",")
+		registry, err := NewRegistry(proxypasses)
 		if err != nil {
 			return nil, err
 		}
 		for _, path := range location.Urls {
-			router.Proxy(path.Path, u, host, path.Type, path.Token, location.IsProxySSLVerify())
+			router.Proxy(path.Path, registry, host, path.Type, path.Token, location.IsProxySSLVerify())
 		}
 	}
 	router.Login(conf.Login)
