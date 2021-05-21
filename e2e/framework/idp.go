@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/e2e/utils"
 	"golang.org/x/oauth2/jws"
@@ -123,6 +124,11 @@ func (i *IdentityProvider) handlerLogin(c *context) {
 	r := c.req
 	q := r.URL.Query()
 	redirectURL, err := url.Parse(q.Get("redirect_uri"))
+	if strings.HasPrefix(redirectURL.String(), "http://127.0.0.1:8888/oauth2/callback") {
+		log.Panicln(redirectURL.String())
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
 	if err != nil {
 		log.Print(err)
 		w.WriteHeader(http.StatusInternalServerError)
