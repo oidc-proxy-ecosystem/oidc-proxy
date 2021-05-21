@@ -2,7 +2,6 @@ package routes
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -76,25 +75,6 @@ func (t *DumpTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	dump(b)
 
 	return resp, err
-}
-
-type sslVerifyTransport struct {
-	proxySSLVerify bool
-	Transport      http.RoundTripper
-}
-
-func newSslVerifyTransport(proxySSLVerify bool) http.RoundTripper {
-	return &sslVerifyTransport{
-		proxySSLVerify: proxySSLVerify,
-	}
-}
-
-func (t *sslVerifyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	tr := http.DefaultTransport.(*http.Transport)
-	tr.TLSClientConfig = &tls.Config{
-		InsecureSkipVerify: !t.proxySSLVerify,
-	}
-	return tr.RoundTrip(req)
 }
 
 type AuthorizationTransaport struct {
