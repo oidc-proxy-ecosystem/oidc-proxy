@@ -31,3 +31,4 @@ proxy
 /oidc-plugin
 /bin
 /dist
+.DS_Store
