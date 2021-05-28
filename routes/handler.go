@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,16 +17,16 @@ import (
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/app"
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/auth"
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/config"
+	"github.com/oidc-proxy-ecosystem/oidc-proxy/errors"
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/logger"
 	"golang.org/x/oauth2"
 )
 
-var ErrNoEndpointsAvailable = errors.New("no endpoints available")
-
 type handler struct {
-	conf config.Servers
-	mux  *http.ServeMux
-	log  logger.ILogger
+	conf          config.Servers
+	mux           *http.ServeMux
+	log           logger.ILogger
+	authenticator *auth.Authenticator
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -66,16 +65,11 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		responseError(h.log, w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	authenticator, err := auth.NewAuthenticator(ctx, conf.Oidc)
-	if err != nil {
-		responseError(h.log, w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	http.Redirect(w, r, authenticator.Config.AuthCodeURL(state, conf.Oidc.SetValues()...), http.StatusTemporaryRedirect)
+	http.Redirect(w, r, h.authenticator.Config.AuthCodeURL(state, conf.Oidc.SetValues()...), http.StatusTemporaryRedirect)
 }
 
 func (h *handler) Login(pattern string) {
-	h.mux.HandleFunc(pattern, h.login)
+	h.mux.Handle(pattern, genInstrumentChain("login", h.login))
 }
 
 func (h *handler) callback(w http.ResponseWriter, r *http.Request) {
@@ -93,17 +87,13 @@ func (h *handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Query().Get("state") != session.Values["state"] {
+		h.log.Debug(fmt.Sprintf("request_state:%s", r.URL.Query().Get("state")))
+		h.log.Debug(fmt.Sprintf("session_state:%s", session.Values["state"]))
 		http.Redirect(w, r, conf.Login, http.StatusTemporaryRedirect)
 		return
 	}
 
-	authenticator, err := auth.NewAuthenticator(ctx, conf.Oidc)
-	if err != nil {
-		responseError(h.log, w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	token, err := authenticator.Config.Exchange(ctx, r.URL.Query().Get("code"), conf.Oidc.SetValues()...)
+	token, err := h.authenticator.Config.Exchange(ctx, r.URL.Query().Get("code"), conf.Oidc.SetValues()...)
 	if err != nil {
 		h.log.Critical(fmt.Sprintf("no token found: %v", err))
 		w.WriteHeader(http.StatusUnauthorized)
@@ -120,7 +110,7 @@ func (h *handler) callback(w http.ResponseWriter, r *http.Request) {
 		ClientID: conf.Oidc.ClientId,
 	}
 
-	_, err = authenticator.Provider.Verifier(oidcConfig).Verify(ctx, rawIDToken)
+	_, err = h.authenticator.Provider.Verifier(oidcConfig).Verify(ctx, rawIDToken)
 
 	if err != nil {
 		responseError(h.log, w, "Failed to verify ID Token: "+err.Error(), http.StatusInternalServerError)
@@ -147,7 +137,7 @@ func (h *handler) callback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) Callback(pattern string) {
-	h.mux.HandleFunc(pattern, h.callback)
+	h.mux.Handle(pattern, genInstrumentChain("callback", h.callback))
 }
 
 func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -170,7 +160,7 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) Logout(pattern string) {
-	h.mux.HandleFunc(pattern, h.logout)
+	h.mux.Handle(pattern, genInstrumentChain("logout", h.logout))
 }
 
 type proxyContextKey struct{}
@@ -205,7 +195,7 @@ func (h *handler) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var rawToken string
-	rawToken, isSave, err := Token(ctx, tokenKey, conf.Oidc, session)
+	rawToken, err = GetAuthorizarionToken(ctx, tokenKey, conf.Oidc, session)
 	if err != nil {
 		if err == unAuthorized {
 			if conf.Redirect {
@@ -220,56 +210,79 @@ func (h *handler) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if isSave {
-		session.Save(r, w)
-	}
-
-	director := func(req *http.Request) {
-		req.URL.Scheme = registry.Endpoint().Scheme
-		req.URL.Host = registry.Endpoint().Host
-		req.Host = host
-	}
-	var rt http.RoundTripper = &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: isProxySslVerify,
-		},
-		Dial: func(network, addr string) (net.Conn, error) {
-			d := &net.Dialer{}
-			for i := 0; i < len(registry.Endpoints); i++ {
-				e := registry.Endpoint()
-				conn, err := d.Dial(network, e.URL.Host)
-				if err != nil {
-					continue
+	send := func(rawToken string) *Response {
+		director := func(req *http.Request) {
+			req.URL.Scheme = registry.Endpoint().Scheme
+			req.URL.Host = registry.Endpoint().Host
+			req.Host = host
+		}
+		var rt http.RoundTripper = &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: isProxySslVerify,
+			},
+			Dial: func(network, addr string) (net.Conn, error) {
+				d := &net.Dialer{}
+				for i := 0; i < len(registry.Endpoints); i++ {
+					e := registry.Endpoint()
+					conn, err := d.Dial(network, e.URL.Host)
+					if err != nil {
+						continue
+					}
+					return conn, err
 				}
-				return conn, err
-			}
 
-			return nil, ErrNoEndpointsAvailable
-		},
+				return nil, errors.ErrNoEndpointsAvailable
+			},
+		}
+		rt = NewDumpTransport(r.Context(), rt)
+		rt = NewAuthorizationTransport(typ, rawToken, rt)
+		rt = NewIsNotFoundPageTransport(rt)
+		reverse := &httputil.ReverseProxy{
+			Director:      director,
+			ErrorHandler:  errorResponse(log),
+			Transport:     rt,
+			FlushInterval: -1,
+		}
+		w, resp := wrapResponseWriter(w)
+		reverse.ServeHTTP(w, r)
+		return resp
 	}
-	rt = NewDumpTransport(r.Context(), rt)
-	rt = NewAuthorizationTransport(typ, rawToken, rt)
-	reverse := &httputil.ReverseProxy{
-		Director:      director,
-		ErrorHandler:  errorResponse(log),
-		Transport:     rt,
-		FlushInterval: -1,
+	resp := send(rawToken)
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		rawToken, isSave, err := Token(ctx, h.authenticator, tokenKey, conf.Oidc, session)
+		if err != nil {
+			if err == unAuthorized {
+				if conf.Redirect {
+					session.Values["redirect"] = r.RequestURI
+					session.Save(r, w)
+					http.Redirect(w, r, conf.Login, http.StatusTemporaryRedirect)
+				} else {
+					UnAuthorizedResponse(w, conf.Login)
+				}
+			} else {
+				responseError(h.log, w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+		if isSave {
+			session.Save(r, w)
+		}
+		send(rawToken)
 	}
-	reverse.ServeHTTP(w, r)
 }
 
 func (h *handler) Proxy(pattern string, registry *Registry, host, typ, tokenKey string, isProxySslVerify bool) {
-	h.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+	h.mux.Handle(pattern, genInstrumentChain(pattern, func(w http.ResponseWriter, r *http.Request) {
 		value := proxyValue{
 			registry:         registry,
 			host:             host,
@@ -281,7 +294,7 @@ func (h *handler) Proxy(pattern string, registry *Registry, host, typ, tokenKey 
 		ctx = context.WithValue(ctx, proxyKey, value)
 		*r = *r.WithContext(ctx)
 		h.proxy(w, r)
-	})
+	}))
 }
 
 type Handler interface {
@@ -292,12 +305,14 @@ type Handler interface {
 	Proxy(pattern string, registry *Registry, host, typ, tokenKey string, isProxySslVerify bool)
 }
 
-func new(conf config.Servers) Handler {
+func new(conf config.Servers) (Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/favicon.ico", func(rw http.ResponseWriter, r *http.Request) {})
+	authenticator, err := auth.NewAuthenticator(context.Background(), conf.Oidc)
 	return &handler{
-		conf: conf,
-		mux:  mux,
-		log:  conf.Logging.GetLogger(),
-	}
+		conf:          conf,
+		mux:           mux,
+		log:           conf.Logging.GetLogger(),
+		authenticator: authenticator,
+	}, err
 }

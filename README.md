@@ -2,7 +2,7 @@
 
 ## 概要
 
-OpenID Connectへ認証を行い、プロキシ先へ`Authorization`ヘッダーにBearerトークンを付与してプロキシ転送を行う。
+OpenID Connectへ認証を行い、プロキシ先へ`Authorization`ヘッダーに設定された認証方式を付与してプロキシ先に転送する。
 
 ### 認証方式
 
@@ -21,7 +21,7 @@ OAuth2: Authorization Code Flowに基づくOpenID Connect
     - [oidc](#oidc)
     - [location](#location)
     - [urls](#urls)
-    - [cache](#cache)
+    - [session](#session)
     - [example](#example)
 
 ## application config file
@@ -47,34 +47,36 @@ ssl証明書ファイルに関しても、ファイル監視を行っている�
 
 | キー                | タイプ | 内容                         | required |
 | :------------------ | :----: | :--------------------------- | :------: |
+| logging             | object | [Logging](#logging)          |   true   |
+| servers             | array  | [Servers](#servers)          |   true   |
 | port                | number | プロキシサーバーのポート番号 |   true   |
 | ssl_certificate     | string | .crtファイル                 |  false   |
 | ssl_certificate_key | string | .keyファイル                 |  false   |
-| logging             | object | [Logging](#logging)          |   true   |
-| servers             | array  | [Servers](#servers)          |   true   |
 
 ### Logging
 
-| キー     | タイプ | 内容                                                                               | required |
-| :------- | :----: | :--------------------------------------------------------------------------------- | :------: |
-| level    | string | ログの出力レベルが設定出来ます。(debug, info, warn, error, criticalのどれかを設定) |   true   |
-| filename | string | 出力先ファイル名を設定(絶対パス)                                                   |  false   |
-| prefix   | string | ログ出力時にprefixが設定される                                                     |  false   |
+| キー       | タイプ | 内容                                                                               | required | default  |
+| :--------- | :----: | :--------------------------------------------------------------------------------- | :------: | :------- |
+| level      | string | ログの出力レベルが設定出来ます。(debug, info, warn, error, criticalのどれかを設定) |  false   | default  |
+| filename   | string | 出力先ファイル名を設定(絶対パス)                                                   |  false   |          |
+| logformat  | string | ログの出力フォーマットの設定(short, standard, long)                                |  false   | standard |
+| timeformat | string | ログ出力時の時間フォーマットの設定(date, datetime, millisec)                       |  false   | datetime |
 
 ### servers
 
-| キー         | タイプ | 内容                                  | required |
-| :----------- | :----: | :------------------------------------ | :------: |
-| session_name | string | cookieセッション名                    |   true   |
-| server_name  | string | バーチャルホスト名                    |   true   |
-| login        | string | プロキシサーバー上のログインURLを設定 |   true   |
-| callback     | string | プロキシサーバー上のコールバックURL   |   true   |
-| logout       | string | プロキシサーバー上のログアウトURL     |   true   |
-| logging      | object | [Logging](#loggingobject)             |   true   |
-| oidc         | object | [OIDC](#oidc)                         |   true   |
-| locations    | array  | [Location](#location)                 |   true   |
-| logging      | object | [Logging](#logging)                   |   true   |
-| cache        | object | [Cache](#cache)                       |   true   |
+| キー        | タイプ  | 内容                                                            | required |
+| :---------- | :-----: | :-------------------------------------------------------------- | :------: |
+| oidc        | object  | [OIDC](#oidc)                                                   |   true   |
+| locations   |  array  | [Location](#location)                                           |   true   |
+| logging     | object  | [Logging](#logging)                                             |   true   |
+| session     | object  | [Session](#session)                                             |   true   |
+| cookie_name | string  | cookieセッション名                                              |   true   |
+| server_name | string  | バーチャルホスト名                                              |   true   |
+| port        |   int   |                                                                 |   true   |
+| login       | string  | プロキシサーバー上のログインURLを設定                           |   true   |
+| callback    | string  | プロキシサーバー上のコールバックURL                             |   true   |
+| logout      | string  | プロキシサーバー上のログアウトURL                               |   true   |
+| redirect    | boolean | セッション情報が消失した際にログインURLへリダレクトするかどうか |  false   |
 
 ### oidc
 
@@ -101,7 +103,7 @@ ssl証明書ファイルに関しても、ファイル監視を行っている�
 | path  | string | 転送先URLパス                                              |   true   |
 | token | string | 転送先パスへ転送するトークンを設定(id_token, access_token) |   true   |
 
-### cache
+### session
 
 | キー       | タイプ | 内容                                         |  required  |
 | :--------- | :----: | :------------------------------------------- | :--------: |

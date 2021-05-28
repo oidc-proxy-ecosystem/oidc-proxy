@@ -12,7 +12,6 @@
             "program": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env",
             "args": [
-                "proxy",
                 "run"
             ]
         }

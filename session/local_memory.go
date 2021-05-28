@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/logger"
+	"github.com/prometheus/common/log"
 )
 
 type item struct {
@@ -78,7 +79,16 @@ func (c *memorySession) Close(ctx context.Context) error {
 	return nil
 }
 func (c *memorySession) Init(ctx context.Context, setting map[string]interface{}) error {
-	c.log.Info(fmt.Sprintf("%#v", setting))
+	var logLevel string
+	var ok bool
+	if logLevel, ok = setting["loglevel"].(string); !ok {
+		logLevel = logger.Info.String()
+	}
+	if ttl, ok := setting["ttl"].(int); ok {
+		c.ttl = ttl
+	}
+	c.log = logger.New(os.Stdout, logger.Convert(logLevel), logger.FormatLong, logger.FormatDatetime)
+	log.Info(fmt.Sprintf("%#v", setting))
 	return nil
 }
 

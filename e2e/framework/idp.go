@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/e2e/utils"
 	"golang.org/x/oauth2/jws"
@@ -124,11 +125,6 @@ func (i *IdentityProvider) handlerLogin(c *context) {
 	r := c.req
 	q := r.URL.Query()
 	redirectURL, err := url.Parse(q.Get("redirect_uri"))
-	if strings.HasPrefix(redirectURL.String(), "http://127.0.0.1:8888/oauth2/callback") {
-		log.Panicln(redirectURL.String())
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
 	if err != nil {
 		log.Print(err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -144,7 +140,13 @@ func (i *IdentityProvider) handlerLogin(c *context) {
 	rq.Set("state", q.Get("state"))
 	rq.Set("code", string(code))
 	redirectURL.RawQuery = rq.Encode()
-	w.Header().Set("Location", redirectURL.String())
+	rUrl := redirectURL.String()
+	if strings.HasPrefix(rUrl, "http://127.0.0.1:8888/oauth2/callback") {
+		log.Panicln(redirectURL.String())
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Location", rUrl)
 	w.WriteHeader(http.StatusSeeOther)
 }
 
@@ -168,6 +170,8 @@ func (i *IdentityProvider) handleToken(c *context) {
 		Iss:           i.Issuer,
 		Aud:           "oidc-proxy-ecosystem-provider",
 		PrivateClaims: map[string]interface{}{"email": "oidc-proxy-ecosystem@n-creativesystem.dev"},
+		Iat:           time.Now().Unix(),
+		Exp:           time.Now().Add(3 * time.Second).Unix(),
 	}
 	idToken, err := jws.Encode(&jws.Header{Algorithm: "RS256", KeyID: "idp"}, cs, i.PrivateKey)
 	if err != nil {

@@ -1,11 +1,14 @@
 package routes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"text/template"
 
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/logger"
 )
@@ -13,6 +16,33 @@ import (
 const (
 	httpStatusClientClosedRequest = 499
 )
+
+var (
+	pages = make(map[int]string)
+)
+
+func MustRegistryPages(code int, pageHtml string) {
+	pages[code] = strings.TrimSpace(pageHtml)
+}
+
+func responseErrorPage(code int, respErr error) string {
+	if val, ok := pages[code]; ok {
+		mp := map[string]interface{}{
+			"Title": http.StatusText(code),
+			"Err":   respErr.Error(),
+		}
+		tmpl, err := template.New("html").Parse(val)
+		if err != nil {
+			return ""
+		}
+		buf := bytes.NewBufferString("")
+		if err := tmpl.Execute(buf, mp); err != nil {
+			return ""
+		}
+		return buf.String()
+	}
+	return respErr.Error()
+}
 
 func errorResponse(log logger.ILogger) func(w http.ResponseWriter, r *http.Request, err error) {
 	return func(w http.ResponseWriter, r *http.Request, err error) {
@@ -25,7 +55,14 @@ func errorResponse(log logger.ILogger) func(w http.ResponseWriter, r *http.Reque
 		default:
 			log.Error(fmt.Sprintf("http: proxy error : %v", err))
 		}
-		w.WriteHeader(status)
+		switch err.(type) {
+		case *ErrNotFoundPage:
+			msg := responseErrorPage(http.StatusNotFound, err)
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(msg))
+		default:
+			w.WriteHeader(status)
+		}
 	}
 }
 

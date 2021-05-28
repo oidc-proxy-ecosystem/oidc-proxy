@@ -19,7 +19,7 @@ type Watch struct {
 	mu                sync.RWMutex
 	applicationConfig string
 	Config            *config.Config
-	MultiHost         *routes.MultiHost
+	MultiHost         routes.MultiHost
 }
 
 var _ watch.Watcher = &Watch{}
@@ -36,7 +36,6 @@ func New(applicationConfig string) (watch.Watcher, error) {
 	cm := &Watch{
 		mu:                sync.RWMutex{},
 		applicationConfig: applicationConfig,
-		MultiHost:         &routes.MultiHost{},
 	}
 	return cm, nil
 }
@@ -51,16 +50,16 @@ func (cm *Watch) Watch(watcher *fsnotify.Watcher) error {
 func (cm *Watch) Load() error {
 	appConf, err := config.New(cm.applicationConfig)
 	cm.Config = &appConf
-	multiHost := routes.MultiHost{}
+	multiHost := routes.NewMultiHostServe()
 	for _, conf := range appConf.Servers {
 		handler, err := routes.New(cm.GetConfiguration(conf.ServerName))
 		if err != nil {
 			return err
 		}
-		multiHost[conf.GetHostname()] = handler
+		multiHost.Add(conf.GetHostname(), handler)
 		logger.Log.Info(fmt.Sprintf("Server listening on %s", conf.GetHostname()))
 	}
-	*cm.MultiHost = multiHost
+	cm.MultiHost = multiHost
 	return err
 }
 

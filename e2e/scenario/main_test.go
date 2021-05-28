@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"testing"
 	"time"
@@ -29,8 +29,7 @@ port: 8888
 ssl_certificate: ""
 ssl_certificate_key: ""
 servers:
-  - server_name: 127.0.0.1
-    port: 8080
+  - server_name: 127.0.0.1:8080
     cookie_name: session
     login: "/oauth2/login"
     callback: "/oauth2/callback"
@@ -72,7 +71,7 @@ servers:
           - "http://kube-oidc-proxy-etcd:2379"
         prefix: "/memory"
         filename: memory.log
-        loglevel: debug
+        loglevel: info
 `
 
 func buildServer(port int) *http.Server {
@@ -229,6 +228,11 @@ func TestProxy(t *testing.T) {
 		proxyServer.Shutdown(context.Background())
 		<-proxyConnsClose
 	}()
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{
+		Transport: mocktransport,
+		Jar:       jar,
+	}
 	tests := []struct {
 		name string
 		fn   func(t *testing.T)
@@ -236,9 +240,6 @@ func TestProxy(t *testing.T) {
 		{
 			name: "authorize",
 			fn: func(t *testing.T) {
-				client := &http.Client{
-					Transport: mocktransport,
-				}
 				res, err := client.Get(proxyURL("oauth2/login"))
 				if !assert.NoError(t, err) {
 					return
@@ -250,15 +251,15 @@ func TestProxy(t *testing.T) {
 			name: "access /api/v1/hello",
 			fn: func(t *testing.T) {
 				for i := 0; i < 10; i++ {
-					client := &http.Client{
-						Transport: mocktransport,
+					if i == 9 {
+						time.Sleep(3 * time.Second)
 					}
-					res, err := client.Get(proxyURL("/api/v1/hello"))
+					res, err := client.Get(proxyURL("api/v1/hello"))
 					if !assert.NoError(t, err) {
 						return
 					}
 					defer res.Body.Close()
-					buf, _ := ioutil.ReadAll(res.Body)
+					buf, _ := io.ReadAll(res.Body)
 					assert.Equal(t, "hello, world", string(buf))
 				}
 			},

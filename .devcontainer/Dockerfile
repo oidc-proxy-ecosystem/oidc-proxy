@@ -22,7 +22,17 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && go get google.golang.org/protobuf/cmd/protoc-gen-go \
     google.golang.org/grpc/cmd/protoc-gen-go-grpc \
-    github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc
+    github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc \
+    && go install github.com/uudashr/gopkgs/v2/cmd/gopkgs@latest \
+    && go install github.com/ramya-rao-a/go-outline@latest \
+    && go install github.com/cweill/gotests/gotests@latest \
+    && go install github.com/fatih/gomodifytags@latest \
+    && go install github.com/josharian/impl@latest \
+    && go install github.com/haya14busa/goplay/cmd/goplay@latest \
+    && go install github.com/go-delve/delve/cmd/dlv@latest \
+    && go install github.com/go-delve/delve/cmd/dlv@master \
+    && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest \
+    && go install golang.org/x/tools/gopls@latest
 
 WORKDIR /src/
 

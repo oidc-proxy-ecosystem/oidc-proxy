@@ -12,6 +12,7 @@ import (
 )
 
 // var HTTPClient internal.ContextKey
+var client *http.Client = http.DefaultClient
 
 func NewContextClient(ctx context.Context, client *http.Client) context.Context {
 	return internal.NewContextClient(ctx, client)
@@ -32,9 +33,9 @@ func NewDumpTransport(ctx context.Context, transport http.RoundTripper) http.Rou
 }
 
 func NewClient(ctx context.Context) *http.Client {
-	client := *http.DefaultClient
-	client.Transport = NewDumpTransport(ctx, client.Transport)
-	return &client
+	c := *client
+	c.Transport = NewDumpTransport(ctx, c.Transport)
+	return &c
 }
 
 type RoundTrip func(req *http.Request) (*http.Response, error)
@@ -100,5 +101,42 @@ func (a *AuthorizationTransaport) transport() http.RoundTripper {
 
 func (a *AuthorizationTransaport) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.Header.Set("Authorization", a.typ+" "+a.token)
-	return a.transport().RoundTrip(r)
+	resp, err := a.transport().RoundTrip(r)
+	return resp, err
+}
+
+type ErrNotFoundPage struct {
+	err error
+}
+
+func (this *ErrNotFoundPage) Error() string {
+	if this.err != nil {
+		return this.err.Error()
+	}
+	return "Not found page"
+}
+
+type isNotFoundPageTransport struct {
+	transport http.RoundTripper
+}
+
+func NewIsNotFoundPageTransport(transport http.RoundTripper) http.RoundTripper {
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	return &isNotFoundPageTransport{
+		transport: transport,
+	}
+}
+
+func (this *isNotFoundPageTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := this.transport.RoundTrip(r)
+	if resp != nil {
+		if resp.StatusCode == http.StatusNotFound {
+			return resp, &ErrNotFoundPage{
+				err: err,
+			}
+		}
+	}
+	return resp, err
 }

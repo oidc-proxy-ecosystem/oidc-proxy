@@ -7,36 +7,53 @@ import (
 
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/config"
 	"github.com/oidc-proxy-ecosystem/oidc-proxy/logger"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-type MultiHost map[string]Handler
-
-func GetHostName(r *http.Request) string {
-	hostPortSplit := strings.Split(r.Host, ":")
-	if len(hostPortSplit) > 1 {
-		return r.Host
-	}
-	port := ""
-	if r.URL.Scheme == "https" {
-		port = "443"
-	} else {
-		port = "80"
-	}
-	return r.Host + ":" + port
+type MultiHost interface {
+	http.Handler
+	Add(virtualServerName string, h Handler)
 }
 
-func (m MultiHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if handler := m[GetHostName(r)]; handler != nil {
+type multiHost struct {
+	multiHost map[string]Handler
+	mux       *http.ServeMux
+}
+
+func NewMultiHostServe() MultiHost {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	return &multiHost{
+		multiHost: make(map[string]Handler),
+		mux:       mux,
+	}
+}
+
+func (m *multiHost) Add(virtualServerName string, h Handler) {
+	m.multiHost[virtualServerName] = h
+}
+
+func (m *multiHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if handler := m.multiHost[GetHostName(r)]; handler != nil {
 		handler.ServeHTTP(w, r)
+	} else if h, patten := m.mux.Handler(r); h != nil && patten != "" {
+		logger.Log.Info(r.URL.String())
+		h.ServeHTTP(w, r)
 	} else {
 		err := fmt.Errorf("%s: %s", GetHostName(r), http.StatusText(http.StatusNotFound))
-		errorResponse(logger.Log)(w, r, err)
+		logger.Log.Error(err)
+		msg := responseErrorPage(http.StatusNotFound, err)
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(msg))
 	}
 }
 
 func New(configuration config.GetConfiguration) (Handler, error) {
 	conf := configuration()
-	router := new(conf)
+	router, err := new(conf)
+	if err != nil {
+		return nil, err
+	}
 	host := conf.GetHostname()
 	for _, location := range conf.Locations {
 		proxypasses := strings.Split(location.ProxyPass, ",")
@@ -52,4 +69,18 @@ func New(configuration config.GetConfiguration) (Handler, error) {
 	router.Callback(conf.Callback)
 	router.Logout(conf.Logout)
 	return router, nil
+}
+
+func GetHostName(r *http.Request) string {
+	hostPortSplit := strings.Split(r.Host, ":")
+	if len(hostPortSplit) > 1 {
+		return r.Host
+	}
+	port := ""
+	if r.URL.Scheme == "https" {
+		port = "443"
+	} else {
+		port = "80"
+	}
+	return r.Host + ":" + port
 }
